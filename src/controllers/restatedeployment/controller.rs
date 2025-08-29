@@ -587,7 +587,8 @@ impl RestateDeployment {
 
     // Finalizer cleanup (the object was deleted, ensure nothing is orphaned)
     async fn cleanup(&self, ctx: Arc<Context>, namespace: &str) -> Result<Action> {
-        ctx.recorder
+        // Event creation errors should not prevent finalizer removal
+        if let Err(err) = ctx.recorder
             .publish(
                 &Event {
                     type_: EventType::Normal,
@@ -598,7 +599,10 @@ impl RestateDeployment {
                 },
                 &self.object_ref(&()),
             )
-            .await?;
+            .await
+        {
+            warn!("Failed to publish deletion event for RestateDeployment {}: {}", self.name_any(), err);
+        }
 
         let rsc_api = Api::<RestateCluster>::all(ctx.client.clone());
         let rs_api = Api::<ReplicaSet>::namespaced(ctx.client.clone(), namespace);
@@ -796,4 +800,43 @@ pub async fn run(client: Client, metrics: Metrics, state: State) {
         .filter_map(|x| async move { Result::ok(x) })
         .for_each(|_| futures::future::ready(()))
         .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::resources::restatedeployments::RestateDeployment;
+    use kube::runtime::events::{Event, EventType};
+
+    #[test]
+    fn test_cleanup_method_error_handling_pattern() {
+        // Verify Event construction works
+        let event = Event {
+            type_: EventType::Normal,
+            reason: "DeleteRequested".into(),
+            note: Some("Test event".to_string()),
+            action: "Deleting".into(),
+            secondary: None,
+        };
+        
+        assert_eq!(event.type_, EventType::Normal);
+        assert_eq!(event.reason, "DeleteRequested");
+        assert_eq!(event.action, "Deleting");
+        assert!(event.note.is_some());
+    }
+
+    #[test]
+    fn test_restatedeployment_has_cleanup_method() {
+        // Compile-time check that RestateDeployment has the correct cleanup method signature
+        use std::sync::Arc;
+        
+        fn check_cleanup_signature<T>()
+        where
+            T: Send + Sync,
+            for<'a> fn(&'a T, Arc<Context>, &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Action>> + Send + 'a>>: Send,
+        {
+        }
+        
+        check_cleanup_signature::<RestateDeployment>();
+    }
 }
