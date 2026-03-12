@@ -45,6 +45,14 @@ struct Arguments {
         default_value = "ghcr.io/restatedev/restate-cloud-tunnel-client:0.5.0"
     )]
     tunnel_client_default_image: String,
+
+    #[arg(
+        long = "cluster-dns",
+        env = "CLUSTER_DNS",
+        value_name = "CLUSTER_DNS",
+        default_value = "cluster.local"
+    )]
+    cluster_dns: String,
 }
 
 #[get("/metrics")]
@@ -73,6 +81,17 @@ async fn main() -> anyhow::Result<()> {
 
     let args: Arguments = Arguments::parse();
 
+    // Validate cluster DNS suffix
+    anyhow::ensure!(
+        !args.cluster_dns.is_empty()
+            && args
+                .cluster_dns
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-'),
+        "--cluster-dns must be a valid DNS suffix (e.g. 'cluster.local'), got: '{}'",
+        args.cluster_dns
+    );
+
     // Initialize Kubernetes controller state
     let state = State::new(
         args.aws_pod_identity_association_cluster,
@@ -80,6 +99,7 @@ async fn main() -> anyhow::Result<()> {
         args.operator_label_name,
         args.operator_label_value,
         args.tunnel_client_default_image,
+        args.cluster_dns,
     );
 
     let client = Client::try_default()
